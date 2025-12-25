@@ -173,8 +173,8 @@ model_options = [
     "Decision Tree (DT)",
     "Random Forest (RF)",
     "SVM (RBF)",
-    "XGBoost (Main)",
-    "LightGBM (Main)",
+    "XGBoost",
+    "LightGBM",
 ]
 
 # If library missing, still show but warn later (so your report screenshots can show the option exists)
