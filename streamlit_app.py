@@ -208,8 +208,8 @@ model_options = [
     "Decision Tree (DT)",
     "Random Forest (RF)",
     "SVM (RBF)",
-    "XGBoost (Main)",
-    "LightGBM (Main)",
+    "XGBoost",
+    "LightGBM",
 ]
 
 model_name = st.sidebar.selectbox("Model", model_options, index=4)
