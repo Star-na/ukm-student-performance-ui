@@ -16,6 +16,21 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
 
+# Optional: Gradient Boosting main models
+try:
+    from xgboost import XGBClassifier
+    _HAS_XGB = True
+except Exception:
+    XGBClassifier = None
+    _HAS_XGB = False
+
+try:
+    from lightgbm import LGBMClassifier
+    _HAS_LGBM = True
+except Exception:
+    LGBMClassifier = None
+    _HAS_LGBM = False
+
 
 # =========================
 # 0) UI NAME (edit here)
@@ -38,33 +53,17 @@ def _sniff_delimiter(sample_text: str) -> str:
         dialect = csv.Sniffer().sniff(sample_text, delimiters=[",", ";", "\t", "|"])
         return dialect.delimiter
     except Exception:
-        # UCI student datasets are typically ';'
         return ";"
 
 
 @st.cache_data(show_spinner=False)
-def read_csv_auto(uploaded_file) -> pd.DataFrame:
+def read_csv_auto(uploaded_file):
     raw = uploaded_file.getvalue()
-    # Try to decode as utf-8 (most common)
     text = raw.decode("utf-8", errors="replace")
     sample = text[:5000]
     delim = _sniff_delimiter(sample)
-
-    # Read using detected delimiter
     df = pd.read_csv(io.StringIO(text), sep=delim)
     return df, delim
-
-
-def get_model(name: str):
-    if name == "Logistic Regression":
-        return LogisticRegression(max_iter=500)
-    if name == "Decision Tree":
-        return DecisionTreeClassifier(random_state=42)
-    if name == "Random Forest":
-        return RandomForestClassifier(n_estimators=200, random_state=42)
-    if name == "SVM (RBF)":
-        return SVC(kernel="rbf", probability=True)
-    raise ValueError("Unknown model")
 
 
 def make_preprocessor(X: pd.DataFrame) -> ColumnTransformer:
@@ -88,6 +87,79 @@ def make_preprocessor(X: pd.DataFrame) -> ColumnTransformer:
     )
 
 
+def build_model(name: str, num_classes: int):
+    # Baselines
+    if name == "Logistic Regression (LR)":
+        return LogisticRegression(max_iter=500)
+    if name == "Decision Tree (DT)":
+        return DecisionTreeClassifier(random_state=42)
+    if name == "Random Forest (RF)":
+        return RandomForestClassifier(n_estimators=200, random_state=42)
+    if name == "SVM (RBF)":
+        return SVC(kernel="rbf", probability=True)
+
+    # Main models: Gradient Boosting
+    if name == "XGBoost (Main)":
+        if not _HAS_XGB:
+            raise RuntimeError("xgboost is not installed. Add `xgboost` to requirements.txt.")
+        if num_classes <= 2:
+            return XGBClassifier(
+                n_estimators=300,
+                learning_rate=0.05,
+                max_depth=4,
+                subsample=0.9,
+                colsample_bytree=0.9,
+                reg_lambda=1.0,
+                objective="binary:logistic",
+                eval_metric="logloss",
+                random_state=42,
+            )
+        return XGBClassifier(
+            n_estimators=400,
+            learning_rate=0.05,
+            max_depth=4,
+            subsample=0.9,
+            colsample_bytree=0.9,
+            reg_lambda=1.0,
+            objective="multi:softprob",
+            num_class=num_classes,
+            eval_metric="mlogloss",
+            random_state=42,
+        )
+
+    if name == "LightGBM (Main)":
+        if not _HAS_LGBM:
+            raise RuntimeError("lightgbm is not installed. Add `lightgbm` to requirements.txt.")
+        if num_classes <= 2:
+            return LGBMClassifier(
+                n_estimators=400,
+                learning_rate=0.05,
+                num_leaves=31,
+                subsample=0.9,
+                colsample_bytree=0.9,
+                random_state=42,
+            )
+        return LGBMClassifier(
+            n_estimators=500,
+            learning_rate=0.05,
+            num_leaves=31,
+            subsample=0.9,
+            colsample_bytree=0.9,
+            random_state=42,
+            objective="multiclass",
+            num_class=num_classes,
+        )
+
+    raise ValueError("Unknown model")
+
+
+def build_pipeline(model_name: str, X: pd.DataFrame, y: pd.Series) -> Pipeline:
+    preprocessor = make_preprocessor(X)
+    num_classes = int(pd.Series(y).nunique(dropna=True))
+    model = build_model(model_name, num_classes)
+    return Pipeline(steps=[("prep", preprocessor), ("model", model)])
+
+
 # =========================
 # Sidebar
 # =========================
@@ -95,10 +167,18 @@ st.sidebar.header("A) Upload Dataset")
 file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
 
 st.sidebar.header("B) Model & Split Settings")
-model_name = st.sidebar.selectbox(
-    "Model",
-    ["Logistic Regression", "Decision Tree", "Random Forest", "SVM (RBF)"]
-)
+
+model_options = [
+    "Logistic Regression (LR)",
+    "Decision Tree (DT)",
+    "Random Forest (RF)",
+    "SVM (RBF)",
+    "XGBoost (Main)",
+    "LightGBM (Main)",
+]
+
+# If library missing, still show but warn later (so your report screenshots can show the option exists)
+model_name = st.sidebar.selectbox("Model", model_options, index=4 if "XGBoost (Main)" in model_options else 0)
 test_size = st.sidebar.slider("Test size", 0.1, 0.5, 0.2, 0.05)
 random_state = st.sidebar.number_input("Random state", value=42, step=1)
 
@@ -118,13 +198,16 @@ st.subheader("1) Dataset Preview (Input)")
 st.write(f"Detected delimiter: `{delim_used}`  |  Rows: {len(df)}  |  Columns: {len(df.columns)}")
 st.dataframe(df.head(20), use_container_width=True)
 
+
 # ---------- Target options ----------
 st.subheader("2) Select Target Column (Label)")
 
-# Option A: use existing label column
-target_col = st.selectbox("Choose the target/label column", df.columns, index=list(df.columns).index("G3") if "G3" in df.columns else 0)
+target_col = st.selectbox(
+    "Choose the target/label column",
+    df.columns,
+    index=list(df.columns).index("G3") if "G3" in df.columns else 0
+)
 
-# Option B: create Risk Level from a numeric column (recommended for Early Warning)
 st.markdown("**Optional (Recommended): Create a 3-level risk label from a numeric score (e.g., G3).**")
 use_risk_label = st.checkbox("Create risk_level label (High/Medium/Low) from a numeric column", value=("G3" in df.columns))
 
@@ -134,11 +217,11 @@ if use_risk_label:
     default_idx = numeric_candidates.index("G3") if "G3" in numeric_candidates else 0
     risk_source_col = st.selectbox("Numeric column for risk label", numeric_candidates, index=default_idx)
 
-    # Typical passing line is 10 (UCI dataset grades 0-20)
     low_cut = st.slider("High risk if score < (cutoff)", 0, 20, 10, 1)
     mid_cut = st.slider("Medium risk if score < (cutoff)", 0, 20, 15, 1)
     if mid_cut <= low_cut:
         st.warning("Make sure Medium cutoff > High cutoff (e.g., 10 and 15).")
+
 
 # Build X, y
 if use_risk_label and risk_source_col is not None:
@@ -161,6 +244,7 @@ else:
     y = df[target_col]
     label_name = target_col
 
+
 # Basic summary
 c1, c2, c3, c4 = st.columns(4)
 with c1:
@@ -175,17 +259,17 @@ with c4:
 st.write(f"Label distribution: **{label_name}**")
 st.dataframe(pd.Series(y).value_counts(dropna=False).rename("count").to_frame(), use_container_width=True)
 
-# ---------- Pipeline ----------
-preprocessor = make_preprocessor(X)
-pipe = Pipeline(steps=[
-    ("prep", preprocessor),
-    ("model", get_model(model_name))
-])
 
 st.subheader("3) Training & Evaluation (Process + Output)")
 st.write("Press **Run Training** in the sidebar to train and evaluate the model.")
 
-# Session state (keep trained model)
+# Warn if missing main model packages
+if model_name == "XGBoost (Main)" and not _HAS_XGB:
+    st.warning("You selected XGBoost, but `xgboost` is not installed. Add it to requirements.txt and redeploy.")
+if model_name == "LightGBM (Main)" and not _HAS_LGBM:
+    st.warning("You selected LightGBM, but `lightgbm` is not installed. Add it to requirements.txt and redeploy.")
+
+# Session state
 if "trained" not in st.session_state:
     st.session_state["trained"] = False
 if "pipe" not in st.session_state:
@@ -194,12 +278,10 @@ if "metrics" not in st.session_state:
     st.session_state["metrics"] = None
 
 if run_train:
-    # Drop rows with missing label
     valid_mask = pd.Series(y).notna()
     X2 = X.loc[valid_mask].copy()
     y2 = pd.Series(y).loc[valid_mask].copy()
 
-    # Some labels may have too many classes; warn user
     nunique = y2.nunique(dropna=True)
     if nunique > 30:
         st.warning(
@@ -207,7 +289,6 @@ if run_train:
             "For Early Warning, it’s better to create 3 risk levels (High/Medium/Low)."
         )
 
-    # Split
     strat = y2 if y2.nunique() > 1 and y2.value_counts().min() >= 2 else None
     X_train, X_test, y_train, y_test = train_test_split(
         X2, y2,
@@ -216,20 +297,21 @@ if run_train:
         stratify=strat
     )
 
-    # Train
-    pipe.fit(X_train, y_train)
+    # Build pipeline AFTER we know y (for XGB/LGBM multiclass)
+    try:
+        pipe = build_pipeline(model_name, X_train, y_train)
+        pipe.fit(X_train, y_train)
+    except Exception as e:
+        st.error(f"Training failed: {e}")
+        st.stop()
 
-    # Evaluate
     y_pred = pipe.predict(X_test)
     acc = accuracy_score(y_test, y_pred)
     f1 = f1_score(y_test, y_pred, average="weighted")
 
     st.session_state["trained"] = True
     st.session_state["pipe"] = pipe
-    st.session_state["metrics"] = {
-        "acc": acc, "f1": f1,
-        "y_test": y_test, "y_pred": y_pred
-    }
+    st.session_state["metrics"] = {"acc": acc, "f1": f1, "y_test": y_test, "y_pred": y_pred}
 
 if st.session_state["trained"] and st.session_state["metrics"] is not None:
     acc = st.session_state["metrics"]["acc"]
@@ -252,7 +334,7 @@ if st.session_state["trained"] and st.session_state["metrics"] is not None:
     st.write("Classification Report")
     st.text(classification_report(y_test, y_pred))
 
-# ---------- Predict & Export ----------
+
 st.subheader("4) Predict & Export (Output)")
 
 if not st.session_state["trained"]:
@@ -261,12 +343,10 @@ if not st.session_state["trained"]:
 
 pipe = st.session_state["pipe"]
 
-# Predict on all rows (exclude rows with missing feature issues is okay; pipeline imputes)
 pred_all = pipe.predict(X)
 out = df.copy()
 out["predicted_label"] = pred_all
 
-# Confidence if supported
 model_obj = pipe.named_steps["model"]
 if hasattr(model_obj, "predict_proba"):
     proba = pipe.predict_proba(X)
@@ -282,5 +362,3 @@ st.download_button(
     file_name="predictions.csv",
     mime="text/csv"
 )
-
-
