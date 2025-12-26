@@ -119,14 +119,9 @@ def build_model(name: str, num_classes: int, trees: int, speed_mode: str):
         return DecisionTreeClassifier(random_state=42)
 
     if name == "Random Forest (RF)":
-        return RandomForestClassifier(
-            n_estimators=min(250, max(80, trees)),
-            random_state=42,
-            n_jobs=-1
-        )
+        return RandomForestClassifier(n_estimators=250, random_state=42, n_jobs=-1)
 
     if name == "SVM (RBF)":
-        # SVM can be slow on larger data; keep default
         return SVC(kernel="rbf", probability=True)
 
     # -------------------------
@@ -136,77 +131,81 @@ def build_model(name: str, num_classes: int, trees: int, speed_mode: str):
         if not _HAS_XGB:
             raise RuntimeError("xgboost not installed. Add `xgboost` to requirements.txt and redeploy.")
 
+        # 快速参数（云端更稳）
         if speed_mode == "Fast":
-            max_depth, lr, subs = 3, 0.10, 0.85
+            max_depth, lr, subs, col = 3, 0.10, 0.8, 0.8
         elif speed_mode == "Accurate":
-            max_depth, lr, subs = 4, 0.05, 0.90
+            max_depth, lr, subs, col = 5, 0.05, 0.9, 0.9
         else:
-            max_depth, lr, subs = 3, 0.07, 0.90
+            max_depth, lr, subs, col = 4, 0.07, 0.85, 0.85
 
-        common = dict(
+        if num_classes <= 2:
+            return XGBClassifier(
+                n_estimators=trees,
+                learning_rate=lr,
+                max_depth=max_depth,
+                subsample=subs,
+                colsample_bytree=col,
+                reg_lambda=1.0,
+                objective="binary:logistic",
+                eval_metric="logloss",
+                tree_method="hist",     # ✅ faster
+                n_jobs=-1,
+                random_state=42,
+                verbosity=0,            # ✅ no spam
+            )
+
+        return XGBClassifier(
             n_estimators=trees,
             learning_rate=lr,
             max_depth=max_depth,
             subsample=subs,
-            colsample_bytree=0.90,
+            colsample_bytree=col,
             reg_lambda=1.0,
-            tree_method="hist",
-            n_jobs=-1,
-            random_state=42,
-            verbosity=0,   # no spam
-        )
-
-        if num_classes <= 2:
-            return XGBClassifier(
-                **common,
-                objective="binary:logistic",
-                eval_metric="logloss"
-            )
-
-        return XGBClassifier(
-            **common,
             objective="multi:softprob",
             num_class=num_classes,
-            eval_metric="mlogloss"
+            eval_metric="mlogloss",
+            tree_method="hist",      # ✅ faster
+            n_jobs=-1,
+            random_state=42,
+            verbosity=0,             # ✅ no spam
         )
 
     if name == "LightGBM (Main)":
         if not _HAS_LGBM:
             raise RuntimeError("lightgbm not installed. Add `lightgbm` to requirements.txt and redeploy.")
 
-        # Make it MUCH faster by default (and still reasonable accuracy)
+        # 更快：限制树复杂度 + 更少树 + 更大 min_child_samples + 降低 max_bin
         if speed_mode == "Fast":
-            lr, leaves, depth, max_bin, mcs = 0.12, 31, -1, 127, 40
+            lr, leaves, depth = 0.10, 31, 6
+            child, subs, col, bins = 60, 0.8, 0.8, 127
         elif speed_mode == "Accurate":
-            lr, leaves, depth, max_bin, mcs = 0.06, 63, -1, 255, 20
+            lr, leaves, depth = 0.05, 63, 8
+            child, subs, col, bins = 30, 0.9, 0.9, 255
         else:  # Balanced
-            lr, leaves, depth, max_bin, mcs = 0.08, 31, -1, 255, 30
+            lr, leaves, depth = 0.07, 31, 7
+            child, subs, col, bins = 40, 0.85, 0.85, 255
 
         common = dict(
             n_estimators=trees,
             learning_rate=lr,
             num_leaves=leaves,
             max_depth=depth,
-            max_bin=max_bin,              # speed up
-            min_child_samples=mcs,        # reduce over-splitting & warnings
-            min_split_gain=0.0,
-            subsample=0.85,
-            subsample_freq=1,
-            colsample_bytree=0.85,
+            min_child_samples=child,
+            subsample=subs,
+            subsample_freq=1,          # ✅ enable bagging
+            colsample_bytree=col,
+            max_bin=bins,              # ✅ reduce binning cost
             n_jobs=-1,
             random_state=42,
-            verbosity=-1,                 # no spam
+            verbosity=-1,              # ✅ reduce logs
             force_col_wise=True
         )
 
         if num_classes <= 2:
             return LGBMClassifier(**common)
 
-        return LGBMClassifier(
-            **common,
-            objective="multiclass",
-            num_class=num_classes
-        )
+        return LGBMClassifier(**common, objective="multiclass", num_class=num_classes)
 
     raise ValueError("Unknown model")
 
@@ -238,18 +237,22 @@ if not _HAS_XGB:
 if not _HAS_LGBM:
     st.sidebar.caption("⚠️ lightgbm not installed (LightGBM will fail until added).")
 
-model_name = st.sidebar.selectbox("Model", model_options, index=4)
+model_name = st.sidebar.selectbox("Model", model_options, index=5)
 test_size = st.sidebar.slider("Test size", 0.1, 0.5, 0.2, 0.05)
 random_state = st.sidebar.number_input("Random state", value=42, step=1)
 
 is_boosting = model_name in ["XGBoost (Main)", "LightGBM (Main)"]
 if is_boosting:
-    speed_mode = st.sidebar.selectbox("Boosting mode", ["Fast", "Balanced", "Accurate"], index=1)
-    # keep default smaller so it won't run 20 minutes
-    trees = st.sidebar.slider("Number of trees (n_estimators)", 60, 260, 140, 10)
+    speed_mode = st.sidebar.selectbox("Boosting mode", ["Balanced", "Fast", "Accurate"], index=1)
+    # ✅ default smaller trees for speed (cloud friendly)
+    trees = st.sidebar.slider("Number of trees (n_estimators)", 50, 200, 120, 10)
 else:
     speed_mode = "Balanced"
-    trees = 140
+    trees = 200
+
+st.sidebar.header("C) Speed Options")
+quick_mode = st.sidebar.checkbox("Quick mode (sample rows for faster training)", value=True)
+sample_n = st.sidebar.slider("Sample size", 500, 6000, 3000, 500)
 
 run_train = st.sidebar.button("Run Training", type="primary")
 
@@ -262,6 +265,11 @@ if file is None:
     st.stop()
 
 df, delim_used = read_csv_auto(file)
+
+# ✅ sample rows for faster training
+if quick_mode and len(df) > sample_n:
+    df = df.sample(n=sample_n, random_state=int(random_state)).reset_index(drop=True)
+    st.sidebar.caption(f"✅ Using sampled rows: {sample_n}")
 
 st.subheader("1) Dataset Preview (Input)")
 st.write(f"Detected delimiter: `{delim_used}` | Rows: {len(df)} | Columns: {len(df.columns)}")
@@ -324,6 +332,7 @@ st.dataframe(
     width="stretch"
 )
 
+
 # =========================================================
 # Session state
 # =========================================================
@@ -350,6 +359,8 @@ current_cfg = {
     "target_col": str(target_col),
     "trees": int(trees),
     "speed_mode": str(speed_mode),
+    "quick_mode": bool(quick_mode),
+    "sample_n": int(sample_n),
 }
 
 if st.session_state["last_cfg"] is None:
@@ -360,6 +371,7 @@ elif st.session_state["last_cfg"] != current_cfg:
     st.session_state["metrics"] = None
     st.session_state["label_encoder"] = None
     st.session_state["last_cfg"] = current_cfg
+
 
 # =========================================================
 # 3) Training & Evaluation
@@ -377,6 +389,11 @@ if run_train:
         st.error("Your label has < 2 unique classes. Cannot train a classifier.")
         st.stop()
 
+    # ✅ 防止误用 G3 变成 0-20 多分类导致超慢
+    if nunique > 10:
+        st.error("Label has too many classes (e.g., using numeric score). Enable 'Create risk_level label' for faster classification.")
+        st.stop()
+
     strat = y2 if y2.value_counts().min() >= 2 else None
     X_train, X_test, y_train, y_test = train_test_split(
         X2, y2,
@@ -385,7 +402,7 @@ if run_train:
         stratify=strat
     )
 
-    # Always encode labels (fixes High/Medium/Low issue)
+    # ✅ encode labels (fixes High/Medium/Low)
     le = LabelEncoder()
     le.fit(y2.astype(str))
     y_train_fit = le.transform(y_train.astype(str))
@@ -393,11 +410,11 @@ if run_train:
     num_classes = int(pd.Series(y_train_fit).nunique())
 
     start = time.time()
-    with st.spinner("Training model... (Boosting may take longer, try Fast mode if slow)"):
+    with st.spinner("Training model... (Boosting may take longer on first run)"):
         try:
             pipe = build_pipeline(model_name, X_train, num_classes, trees, speed_mode)
 
-            # Capture model logs (avoid console spam)
+            # ✅ capture logs (stop LightGBM spam)
             buf = io.StringIO()
             with redirect_stdout(buf), redirect_stderr(buf):
                 pipe.fit(X_train, y_train_fit)
@@ -450,6 +467,7 @@ if st.session_state["trained"] and st.session_state["metrics"] is not None:
     st.write("Classification Report")
     st.text(classification_report(y_test_show, y_pred_show))
 
+
 # =========================================================
 # 4) Predict & Export
 # =========================================================
@@ -486,5 +504,3 @@ st.download_button(
     file_name="predictions.csv",
     mime="text/csv"
 )
-
-st.success("Done. You can now take screenshots for the D4 Interface section.")
