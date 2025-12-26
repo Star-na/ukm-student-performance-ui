@@ -487,4 +487,3 @@ st.download_button(
     mime="text/csv"
 )
 
-st.success("Done. You can now take screenshots for the D4 Interface section.")
