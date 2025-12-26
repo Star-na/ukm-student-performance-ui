@@ -219,10 +219,10 @@ def build_pipeline(model_name: str, X: pd.DataFrame, num_classes: int, trees: in
 # =========================================================
 # Sidebar
 # =========================================================
-st.sidebar.header("A) Upload Dataset")
+st.sidebar.header("Upload Dataset")
 file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
 
-st.sidebar.header("B) Model & Split Settings")
+st.sidebar.header("Model & Split Settings")
 model_options = [
     "Logistic Regression (LR)",
     "Decision Tree (DT)",
@@ -250,7 +250,7 @@ else:
     speed_mode = "Balanced"
     trees = 200
 
-st.sidebar.header("C) Speed Options")
+st.sidebar.header("Speed Options")
 quick_mode = st.sidebar.checkbox("Quick mode (sample rows for faster training)", value=True)
 sample_n = st.sidebar.slider("Sample size", 500, 6000, 3000, 500)
 
