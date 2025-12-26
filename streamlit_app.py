@@ -37,8 +37,8 @@ except Exception:
 # =========================================================
 # 0) UI NAME (edit here)
 # =========================================================
-APP_TAB_TITLE = "UKM Student Performance UI"
-APP_MAIN_TITLE = "UKM Student Performance Prediction System (Interface Prototype)"
+APP_TAB_TITLE = "Student Performance UI"
+APP_MAIN_TITLE = "Student Performance Prediction System (Interface Prototype)"
 APP_SUBTITLE = "Upload → Preview/Select Label → Train/Evaluate → Predict → Export"
 
 st.set_page_config(page_title=APP_TAB_TITLE, layout="wide")
