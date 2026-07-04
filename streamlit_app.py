@@ -637,8 +637,9 @@ with tabs[0]:
             mid_cut = st.slider("Medium risk if score is lower than", 0, 20, 15, 1)
 
             if mid_cut <= low_cut:
-                st.warning("Medium cutoff should be greater than High cutoff, for example 10 and 15.")
-
+                st.error("Medium cutoff must be greater than High cutoff, for example 10 and 15.")
+                st.stop()
+                
     if use_risk_label and risk_source_col is not None and mid_cut > low_cut:
         y_display = make_risk_label(df[risk_source_col], low_cut, mid_cut)
         X = df.drop(columns=[risk_source_col])
