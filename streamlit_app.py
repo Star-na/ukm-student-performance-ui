@@ -498,8 +498,7 @@ def render_landing_page():
     with st.expander("Expected Dataset Format"):
         st.write(
             "The system expects a structured CSV dataset containing student academic, demographic, "
-            "or behavioural attributes. For the UCI Student Performance dataset, the final grade "
-            "column `G3` can be used to generate High / Medium / Low risk labels."
+            "or behavioural attributes."
         )
 
     with st.expander("Privacy and Prototype Scope"):
